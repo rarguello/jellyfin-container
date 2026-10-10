@@ -1,0 +1,31 @@
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: jellyfin-fuse
+# Allows the privileged rclone sidecar container (FUSE + mountPropagation).
+allowPrivilegedContainer: true
+allowPrivilegeEscalation: true
+allowedCapabilities: ["*"]
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+fsGroup:
+  type: MustRunAs
+runAsUser:
+  type: MustRunAsRange
+seLinuxContext:
+  type: MustRunAs
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - persistentVolumeClaim
+  - projected
+  - secret
+readOnlyRootFilesystem: false
+users:
+  - system:serviceaccount:jellyfin:jellyfin

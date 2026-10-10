@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: jellyfin
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - scc.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - route.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+secretGenerator:
+  - name: rclone-config
+    files:
+      - rclone.conf=secrets/rclone.conf

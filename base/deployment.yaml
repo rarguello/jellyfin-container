@@ -1,0 +1,131 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  labels:
+    app: jellyfin
+spec:
+  replicas: 1
+  strategy:
+    # Recreate avoids the ReadWriteOnce PVC deadlock during a rolling update.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      serviceAccountName: jellyfin
+      initContainers:
+        # rclone does not create the mountpoint: create it in the shared volume.
+        - name: mkdir-mountpoint
+          image: docker.io/library/alpine:latest
+          command: ["sh", "-c", "mkdir -p /mnt/shared/pcloud"]
+          volumeMounts:
+            - name: pcloud
+              mountPath: /mnt/shared
+      containers:
+        - name: jellyfin
+          image: docker.io/jellyfin/jellyfin:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            # Change to your timezone (kept generic in the base).
+            - name: TZ
+              value: UTC
+            # Writable HOME so ASP.NET persists its DataProtection keys in
+            # /config and sessions survive restarts.
+            - name: HOME
+              value: /config
+            # Public URL used in autodiscovery responses. Change to your own.
+            - name: JELLYFIN_PublishedServerUrl
+              value: https://jellyfin.example.com
+          ports:
+            - name: http
+              containerPort: 8096
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: cache
+              mountPath: /cache
+            # Receives the FUSE mount from the sidecar (rclone mounts at
+            # <shared>/pcloud, which shows up here as /media/pcloud).
+            - name: pcloud
+              mountPath: /media
+              mountPropagation: HostToContainer
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: rclone
+          image: docker.io/rclone/rclone:latest
+          imagePullPolicy: IfNotPresent
+          # FUSE requires a privileged container (granted by the jellyfin-fuse SCC).
+          securityContext:
+            privileged: true
+          args:
+            - mount
+            - "pcloud:"
+            # Subdirectory of the shared volume (its root is already a mountpoint).
+            - /mnt/shared/pcloud
+            - --config=/config/rclone/rclone.conf
+            - --allow-other
+            - --read-only
+            - --vfs-cache-mode=full
+            - --vfs-cache-max-size=30G
+            - --vfs-cache-max-age=24h
+            - --cache-dir=/cache-rclone
+            - --dir-cache-time=1h
+            - --poll-interval=1m
+            - --log-level=INFO
+          volumeMounts:
+            # Bidirectional: propagate the FUSE mount (at /mnt/shared/pcloud) to
+            # the Jellyfin container.
+            - name: pcloud
+              mountPath: /mnt/shared
+              mountPropagation: Bidirectional
+            - name: rclone-config
+              mountPath: /config/rclone
+              readOnly: true
+            - name: rclone-cache
+              mountPath: /cache-rclone
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: jellyfin-config
+        - name: cache
+          emptyDir: {}
+        - name: pcloud
+          emptyDir: {}
+        - name: rclone-config
+          secret:
+            secretName: rclone-config
+        - name: rclone-cache
+          emptyDir:
+            sizeLimit: 40Gi
